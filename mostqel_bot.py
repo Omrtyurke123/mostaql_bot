@@ -59,6 +59,27 @@ ACTIVE_SITES = [
     if on
 ]
 
+# ---- إعادة نشر فورية من قنوات تليجرام عامة ----
+# كل مصدر: اسم القناة العامة (بدون @)، ومتغير البيئة اللي فيه
+# chat id الجروب الوجهة بتاعك
+FORWARD_SOURCES = [
+    {
+        "label": "مستقل",
+        "channel": "MostaqlDevelopment",
+        "dest_env": "MOSTAQL_GROUP_ID",
+    },
+    {
+        "label": "خمسات",
+        "channel": "KhamsatRequests",
+        "dest_env": "KHAMSAT_GROUP_ID",
+    },
+    {
+        "label": "نفذلي",
+        "channel": "nafezly",
+        "dest_env": "NAFEZLY_GROUP_ID",
+    },
+]
+
 # عداد طلبات ScraperAPI في الجولة (لمتابعة الكريديت)
 SCRAPER_CALLS = 0
 
@@ -1099,7 +1120,10 @@ def fetch_jobs():
 # 11) Telegram
 # ============================================================
 
-def send_telegram(text):
+def send_telegram(text, chat_id=None):
+
+    if chat_id is None:
+        chat_id = CHAT_ID
 
     try:
 
@@ -1109,7 +1133,7 @@ def send_telegram(text):
 
             json={
 
-                "chat_id": CHAT_ID,
+                "chat_id": chat_id,
 
                 "text": text,
 
@@ -1138,6 +1162,182 @@ def send_telegram(text):
         )
 
         return False
+
+
+# ============================================================
+# 12b) إعادة نشر فورية من قنوات تليجرام عامة
+# ============================================================
+#
+# بيقرا صفحة المعاينة العامة لكل قناة (t.me/s/<channel>)، وده
+# شغال من غير تسجيل دخول ومن غير ScraperAPI. بيقارن بآخر رسالة
+# اتبعتت (محفوظة في جدول meta) وبيبعت بس الجديد للجروب الوجهة.
+#
+
+def fetch_channel_preview(channel):
+
+    url = f"https://t.me/s/{channel}"
+
+    return fetch_direct(url)
+
+
+def parse_channel_messages(html, channel):
+    """
+    بيرجّع list مرتبة تصاعديًا من:
+    {"id": رقم الرسالة, "text": النص (من غير تهريب HTML)}
+    بيتجاهل الرسايل اللي من غير نص (صورة/فيديو بدون كابشن).
+    """
+
+    soup = BeautifulSoup(html, "lxml")
+
+    blocks = soup.select("div.tgme_widget_message[data-post]")
+
+    messages = []
+
+    for block in blocks:
+
+        post = block.get("data-post", "")
+
+        if "/" not in post:
+            continue
+
+        try:
+            msg_id = int(post.rsplit("/", 1)[-1])
+        except ValueError:
+            continue
+
+        text_div = block.select_one(
+            ".tgme_widget_message_text"
+        )
+
+        if text_div is None:
+            messages.append({"id": msg_id, "text": None})
+            continue
+
+        for br in text_div.find_all("br"):
+            br.replace_with("\n")
+
+        text = text_div.get_text("", strip=True)
+
+        messages.append({
+            "id": msg_id,
+            "text": text if text else None
+        })
+
+    messages.sort(key=lambda m: m["id"])
+
+    return messages
+
+
+def forward_source(source):
+
+    label = source["label"]
+    channel = source["channel"]
+
+    dest_id = os.environ.get(source["dest_env"])
+
+    if not dest_id:
+        print(
+            f"⏭️ [{label}] متجاهل: متغير البيئة "
+            f"{source['dest_env']} مش متسجل"
+        )
+        return
+
+    print(
+        f"📡 [{label}] جاري فحص قناة t.me/{channel}..."
+    )
+
+    html = fetch_channel_preview(channel)
+
+    messages = parse_channel_messages(html, channel)
+
+    if not messages:
+        raise RuntimeError(
+            "الصفحة اتجابت لكن مفيش رسايل اتقرت "
+            "(شكل الصفحة ممكن يكون اتغيّر)"
+        )
+
+    meta_key = f"fwdid:{channel}"
+
+    row = db.execute(
+        "SELECT value FROM meta WHERE key = ?",
+        (meta_key,)
+    ).fetchone()
+
+    last_id = int(row[0]) if row else None
+
+    max_id_seen = max(m["id"] for m in messages)
+
+    if last_id is None:
+
+        print(
+            f"   ℹ️ [{label}] أول تشغيل — هحفظ آخر رسالة "
+            f"كنقطة بداية من غير إعادة نشر القديم"
+        )
+
+        db.execute(
+            "INSERT OR REPLACE INTO meta VALUES (?, ?)",
+            (meta_key, str(max_id_seen))
+        )
+
+        db.commit()
+
+        return
+
+    new_messages = [
+        m for m in messages
+        if m["id"] > last_id and m["text"]
+    ]
+
+    sent_count = 0
+
+    for m in new_messages:
+
+        ok = send_telegram(
+            h_escape(m["text"], quote=False),
+            chat_id=dest_id
+        )
+
+        if ok:
+            sent_count += 1
+
+        time.sleep(1.5)
+
+    print(
+        f"   ✅ [{label}] اتبعت {sent_count} من "
+        f"{len(new_messages)} رسالة جديدة"
+    )
+
+    db.execute(
+        "INSERT OR REPLACE INTO meta VALUES (?, ?)",
+        (meta_key, str(max_id_seen))
+    )
+
+    db.commit()
+
+
+def forward_new_posts():
+
+    print()
+    print("=" * 60)
+    print("📡 جاري فحص قنوات النشر الفوري...")
+    print("=" * 60)
+
+    for source in FORWARD_SOURCES:
+
+        try:
+            forward_source(source)
+
+        except Exception as e:
+
+            print(
+                f"⚠️ [{source['label']}] فشل: {e}"
+            )
+
+            notify_failure(
+                f"إعادة نشر {source['label']}", e
+            )
+
+    print("✅ انتهى فحص قنوات النشر الفوري")
 
 
 # ============================================================
@@ -1292,7 +1492,16 @@ def run_round():
 # 13) Start
 # ============================================================
 
-# على GitHub Actions: جولة واحدة في كل تشغيل،
-# والتكرار (كل 4 ساعات) بيتحكم فيه ملف الـ workflow
+# على GitHub Actions: جولة واحدة في كل تشغيل، والتكرار بيتحكم
+# فيه ملف الـ workflow. وضعين:
+#   python mostqel_bot.py          → البحث العادي (مستقل+نفذلي+كفيل)
+#   python mostqel_bot.py forward  → إعادة نشر القنوات (مستقل/خمسات/نفذلي)
 
-run_round()
+if __name__ == "__main__":
+
+    mode = sys.argv[1] if len(sys.argv) > 1 else "round"
+
+    if mode == "forward":
+        forward_new_posts()
+    else:
+        run_round()
