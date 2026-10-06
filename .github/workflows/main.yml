@@ -31,6 +31,8 @@ jobs:
           MOSTAQL_GROUP_ID: ${{ secrets.MOSTAQL_GROUP_ID }}
           KHAMSAT_GROUP_ID: ${{ secrets.KHAMSAT_GROUP_ID }}
           NAFEZLY_GROUP_ID: ${{ secrets.NAFEZLY_GROUP_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PYTHONIOENCODING: utf-8
         run: python -u mostqel_bot.py forward
 
