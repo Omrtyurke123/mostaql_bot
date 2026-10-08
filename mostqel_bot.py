@@ -28,6 +28,12 @@ TOKEN = os.environ["TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 SCRAPER_KEY = os.environ["SCRAPER_KEY"]
 
+# اختياري: لو موجودين، البوت كمان بيكتب كل مشروع/رسالة في Supabase
+# عشان منصة "فرصة" تعرضهم. لو مش موجودين، البوت بيشتغل زي ما هو
+# (تليجرام بس) من غير أي تأثير.
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
 
 MAX_OFFERS = 10
 TOP_N = 10
@@ -1116,6 +1122,51 @@ def fetch_jobs():
     return all_jobs
 
 
+def push_jobs_to_supabase(rows):
+    """
+    بيكتب/يحدّث مجموعة صفوف في جدول jobs بمنصة "فرصة" (Supabase).
+    اختياري تمامًا: لو المتغيرات مش متسجلة، بيرجع من غير ما يعمل حاجة.
+    """
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not rows:
+        return
+
+    try:
+
+        response = requests.post(
+
+            f"{SUPABASE_URL}/rest/v1/jobs",
+
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+
+            params={
+                "on_conflict": "feed_type,source,external_id"
+            },
+
+            json=rows,
+
+            timeout=30
+        )
+
+        if not response.ok:
+            print(
+                f"⚠️ فشل الحفظ في منصة فرصة: "
+                f"{response.status_code} {response.text[:200]}"
+            )
+
+    except Exception as e:
+
+        print(
+            f"⚠️ فشل الحفظ في منصة فرصة: {e}"
+        )
+
+
+
 # ============================================================
 # 11) Telegram
 # ============================================================
@@ -1216,7 +1267,28 @@ def parse_channel_messages(html, channel):
         for br in text_div.find_all("br"):
             br.replace_with("\n")
 
-        text = text_div.get_text("", strip=True)
+        # get_text("", strip=True) كان بيمسح الأسطر الجديدة اللي ضفناها
+        # (لأن strip بيتطبق على كل جزء لوحده، و"\n".strip() == "")
+        # فكانت الرسالة بتتحول لفقرة واحدة ملخبطة. الحل: من غير strip
+        # هنا، وبعدين strip على النتيجة النهائية بس.
+        text = text_div.get_text()
+        text = "\n".join(
+            line.strip() for line in text.split("\n")
+        ).strip()
+
+        # لو الرابط متحط كزرار/نص مختلف عن الرابط نفسه
+        # (زي "عرض التفاصيل")، get_text() مابيجيبوش، فنضيفه يدوي
+        links = []
+
+        for a in text_div.find_all("a", href=True):
+
+            href = a["href"]
+
+            if href not in text and href not in links:
+                links.append(href)
+
+        if links:
+            text += "\n\n" + "\n".join(links)
 
         messages.append({
             "id": msg_id,
@@ -1288,6 +1360,17 @@ def forward_source(source):
         if m["id"] > last_id and m["text"]
     ]
 
+    # تحديث منصة "فرصة" (اختياري)
+    push_jobs_to_supabase([
+        {
+            "feed_type": "instant",
+            "source": label,
+            "raw_text": m["text"],
+            "external_id": f"{channel}:{m['id']}",
+        }
+        for m in new_messages
+    ])
+
     sent_count = 0
 
     for m in new_messages:
@@ -1358,6 +1441,22 @@ def run_round():
 
     # Fetch
     jobs = fetch_jobs()
+
+    # تحديث منصة "فرصة" (اختياري — بيتجاهل نفسه لو مش مفعّل)
+    push_jobs_to_supabase([
+        {
+            "feed_type": "low_offers",
+            "source": j["site"],
+            "title": j["title"],
+            "description": j["brief"],
+            "budget": j["price"],
+            "offers_count": j["offers"],
+            "url": j["url"],
+            "posted_label": j.get("posted", ""),
+            "external_id": j["url"],
+        }
+        for j in jobs
+    ])
 
 
     # Already sent
