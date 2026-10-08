@@ -1276,19 +1276,39 @@ def parse_channel_messages(html, channel):
             line.strip() for line in text.split("\n")
         ).strip()
 
-        # لو الرابط متحط كزرار/نص مختلف عن الرابط نفسه
-        # (زي "عرض التفاصيل")، get_text() مابيجيبوش، فنضيفه يدوي
-        links = []
+        # ---- إيجاد رابط "الطلب/المشروع" الحقيقي ----
+        # بعض القنوات (زي خمسات) بتحط زرار منفصل تحت الرسالة
+        # ("عرض الطلب في خمسات") وده الرابط الصح. لو دورنا جوه
+        # نص الرسالة بس، ممكن نمسك غلط رابط بروفايل صاحب الطلب
+        # (زي اسمه لو كان قابل للنقر). فالأولوية للزرار لو موجود.
+        link = None
 
-        for a in text_div.find_all("a", href=True):
+        button = block.select_one(
+            ".tgme_widget_message_reply_markup a[href]"
+        )
 
-            href = a["href"]
+        if button:
+            link = button["href"]
 
-            if href not in text and href not in links:
-                links.append(href)
+        else:
 
-        if links:
-            text += "\n\n" + "\n".join(links)
+            # مفيش زرار (زي نفذلي، بتحط الرابط كنص صريح) →
+            # ندوّر جوه النص على أي رابط لسه مش مكتوب كنص ظاهر
+            for a in text_div.find_all("a", href=True):
+
+                href = a["href"]
+
+                if href not in text:
+                    link = href
+                    break
+
+        if link and link not in text:
+            text += "\n\n" + link
+
+        print(
+            f"      · رسالة {msg_id}: "
+            f"نص={text[:60]!r}... رابط={link}"
+        )
 
         messages.append({
             "id": msg_id,
