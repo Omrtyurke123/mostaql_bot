@@ -1277,30 +1277,56 @@ def parse_channel_messages(html, channel):
         ).strip()
 
         # ---- إيجاد رابط "الطلب/المشروع" الحقيقي ----
-        # بعض القنوات (زي خمسات) بتحط زرار منفصل تحت الرسالة
-        # ("عرض الطلب في خمسات") وده الرابط الصح. لو دورنا جوه
-        # نص الرسالة بس، ممكن نمسك غلط رابط بروفايل صاحب الطلب
-        # (زي اسمه لو كان قابل للنقر). فالأولوية للزرار لو موجود.
+        # الكارت الأخضر اللي شكله زرار ("عرض الطلب في خمسات") مش
+        # زرار فعلي — ده كارت معاينة تلقائي بيعمله تليجرام للرابط
+        # الموجود في الرسالة، وعنوانه جاي من صفحة الموقع نفسه.
+        # فالرابط الصح موجود في الكارت ده، مش في أي رابط تاني
+        # (زي رابط بروفايل صاحب الطلب لو كان اسمه قابل للنقر).
         link = None
 
-        button = block.select_one(
-            ".tgme_widget_message_reply_markup a[href]"
+        preview = block.select_one(
+            ".tgme_widget_message_link_preview"
         )
 
-        if button:
-            link = button["href"]
+        if preview:
 
-        else:
+            if preview.name == "a" and preview.get("href"):
+                link = preview["href"]
 
-            # مفيش زرار (زي نفذلي، بتحط الرابط كنص صريح) →
-            # ندوّر جوه النص على أي رابط لسه مش مكتوب كنص ظاهر
-            for a in text_div.find_all("a", href=True):
+            else:
 
-                href = a["href"]
+                inner = preview.select_one("a[href]")
 
-                if href not in text:
-                    link = href
-                    break
+                if inner:
+                    link = inner["href"]
+
+        if not link:
+
+            button = block.select_one(
+                ".tgme_widget_message_reply_markup a[href]"
+            )
+
+            if button:
+                link = button["href"]
+
+        if not link:
+
+            # آخر حل: رابط جوه النص لسه مش مكتوب كنص ظاهر،
+            # وتجنّب روابط البروفايل (user/) قد الإمكان
+            candidates = [
+                a["href"]
+                for a in text_div.find_all("a", href=True)
+                if a["href"] not in text
+            ]
+
+            non_profile = [
+                h for h in candidates if "/user/" not in h
+            ]
+
+            if non_profile:
+                link = non_profile[0]
+            elif candidates:
+                link = candidates[0]
 
         if link and link not in text:
             text += "\n\n" + link
