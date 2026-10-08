@@ -1284,30 +1284,34 @@ def parse_channel_messages(html, channel):
         # (زي رابط بروفايل صاحب الطلب لو كان اسمه قابل للنقر).
         link = None
 
-        preview = block.select_one(
-            ".tgme_widget_message_link_preview"
+        # الزرار الأخضر "عرض الطلب في ..." ده inline keyboard حقيقي
+        # (اتأكدنا من الكلاس الفعلي بفحص العنصر)، مش جزء من نص
+        # الرسالة. ده المصدر الصحيح للرابط، وبيتفحص الأول.
+        button = block.select_one(
+            ".tgme_widget_message_inline_keyboard "
+            "a.tgme_widget_message_inline_button[href]"
         )
 
-        if preview:
-
-            if preview.name == "a" and preview.get("href"):
-                link = preview["href"]
-
-            else:
-
-                inner = preview.select_one("a[href]")
-
-                if inner:
-                    link = inner["href"]
+        if button:
+            link = button["href"]
 
         if not link:
 
-            button = block.select_one(
-                ".tgme_widget_message_reply_markup a[href]"
+            preview = block.select_one(
+                ".tgme_widget_message_link_preview"
             )
 
-            if button:
-                link = button["href"]
+            if preview:
+
+                if preview.name == "a" and preview.get("href"):
+                    link = preview["href"]
+
+                else:
+
+                    inner = preview.select_one("a[href]")
+
+                    if inner:
+                        link = inner["href"]
 
         if not link:
 
